@@ -1,4 +1,26 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
+  deleteDoc,
+  getDocs,
+  writeBatch
+} from 'firebase/firestore';
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  User
+} from 'firebase/auth';
+import {
+  db,
+  auth,
+  googleProvider,
+  handleFirestoreError,
+  OperationType
+} from '../firebase';
 import {
   Article,
   Comment,
@@ -29,6 +51,13 @@ interface AppContextType {
   customLogoMedia: CustomLogoMedia | null;
   backgroundConfig: BackgroundAnimationConfig;
 
+  // Firebase Auth & Cloud Sync
+  currentUser: User | null;
+  isAuthLoading: boolean;
+  isFirebaseConnected: boolean;
+  signInWithGoogle: () => Promise<void>;
+  signOutUser: () => Promise<void>;
+
   // Actions
   t: (key: string) => string;
   setLanguage: (lang: Language) => void;
@@ -41,16 +70,16 @@ interface AppContextType {
   setActiveTag: (tag: string | null) => void;
   toggleBookmark: (articleId: string) => void;
   toggleLikeArticle: (articleId: string) => void;
-  addComment: (articleId: string, content: string, authorName: string, parentId?: string | null) => void;
-  likeComment: (commentId: string) => void;
-  deleteComment: (commentId: string) => void;
-  addArticle: (newArticleData: Omit<Article, 'id' | 'views' | 'likes' | 'shares'>) => void;
-  updateArticle: (article: Article) => void;
-  deleteArticle: (id: string) => void;
-  subscribeNewsletter: (email: string, name?: string, frequency?: 'daily' | 'weekly' | 'breaking', topics?: string[]) => boolean;
-  setCustomLogoMedia: (media: CustomLogoMedia | null) => void;
-  setBackgroundConfig: (config: BackgroundAnimationConfig) => void;
-  resetToDefaultData: () => void;
+  addComment: (articleId: string, content: string, authorName: string, parentId?: string | null) => Promise<void>;
+  likeComment: (commentId: string) => Promise<void>;
+  deleteComment: (commentId: string) => Promise<void>;
+  addArticle: (newArticleData: Omit<Article, 'id' | 'views' | 'likes' | 'shares'>) => Promise<void>;
+  updateArticle: (article: Article) => Promise<void>;
+  deleteArticle: (id: string) => Promise<void>;
+  subscribeNewsletter: (email: string, name?: string, frequency?: 'daily' | 'weekly' | 'breaking', topics?: string[]) => Promise<boolean>;
+  setCustomLogoMedia: (media: CustomLogoMedia | null) => Promise<void>;
+  setBackgroundConfig: (config: BackgroundAnimationConfig) => Promise<void>;
+  resetToDefaultData: () => Promise<void>;
   showNotification: (msg: string) => void;
 }
 
@@ -96,7 +125,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
-  // 3. Articles State
+  // 3. Firebase Auth State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [isFirebaseConnected, setIsFirebaseConnected] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      setIsAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      showNotification('Conectado com o Google com sucesso! 🎉');
+    } catch (error) {
+      console.error('Login error:', error);
+      showNotification('Não foi possível autenticar com o Google.');
+    }
+  };
+
+  const signOutUser = async () => {
+    try {
+      await signOut(auth);
+      showNotification('Sessão encerrada com sucesso.');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
+  // 4. Articles State (Local fallback + Cloud Firestore)
   const [articles, setArticles] = useState<Article[]>(() => {
     const saved = localStorage.getItem(ARTICLES_STORAGE_KEY);
     if (saved) {
@@ -109,11 +170,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_ARTICLES;
   });
 
+  // Seed / Sync Articles with Firestore
+  const hasSeededArticles = useRef(false);
   useEffect(() => {
-    localStorage.setItem(ARTICLES_STORAGE_KEY, JSON.stringify(articles));
-  }, [articles]);
+    const articlesCol = collection(db, 'articles');
+    const unsubscribe = onSnapshot(
+      articlesCol,
+      async (snapshot) => {
+        setIsFirebaseConnected(true);
+        if (snapshot.empty && !hasSeededArticles.current) {
+          hasSeededArticles.current = true;
+          // Seed database with initial rich articles
+          try {
+            const batch = writeBatch(db);
+            INITIAL_ARTICLES.forEach((art) => {
+              const artRef = doc(db, 'articles', art.id);
+              batch.set(artRef, art);
+            });
+            await batch.commit();
+            console.log('Firestore seeded with INITIAL_ARTICLES');
+          } catch (seedErr) {
+            console.warn('Initial seeding fallback:', seedErr);
+          }
+        } else if (!snapshot.empty) {
+          const remoteArticles: Article[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteArticles.push(docSnap.data() as Article);
+          });
+          // Sort by published date descending
+          remoteArticles.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+          setArticles(remoteArticles);
+          localStorage.setItem(ARTICLES_STORAGE_KEY, JSON.stringify(remoteArticles));
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'articles');
+      }
+    );
 
-  // 4. Comments State
+    return () => unsubscribe();
+  }, []);
+
+  // 5. Comments State
   const [comments, setComments] = useState<Comment[]>(() => {
     const saved = localStorage.getItem(COMMENTS_STORAGE_KEY);
     if (saved) {
@@ -126,11 +224,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_COMMENTS;
   });
 
+  const hasSeededComments = useRef(false);
   useEffect(() => {
-    localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(comments));
-  }, [comments]);
+    const commentsCol = collection(db, 'comments');
+    const unsubscribe = onSnapshot(
+      commentsCol,
+      async (snapshot) => {
+        if (snapshot.empty && !hasSeededComments.current) {
+          hasSeededComments.current = true;
+          try {
+            const batch = writeBatch(db);
+            INITIAL_COMMENTS.forEach((c) => {
+              const cRef = doc(db, 'comments', c.id);
+              batch.set(cRef, c);
+            });
+            await batch.commit();
+          } catch (err) {
+            console.warn('Seeding comments fallback:', err);
+          }
+        } else if (!snapshot.empty) {
+          const remoteComments: Comment[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteComments.push(docSnap.data() as Comment);
+          });
+          remoteComments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setComments(remoteComments);
+          localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(remoteComments));
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'comments');
+      }
+    );
 
-  // 5. Subscribers State
+    return () => unsubscribe();
+  }, []);
+
+  // 6. Subscribers State
   const [subscribers, setSubscribers] = useState<NewsletterSubscriber[]>(() => {
     const saved = localStorage.getItem(SUBSCRIBERS_STORAGE_KEY);
     if (saved) {
@@ -144,10 +274,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   useEffect(() => {
-    localStorage.setItem(SUBSCRIBERS_STORAGE_KEY, JSON.stringify(subscribers));
-  }, [subscribers]);
+    // Only subscribe listener if current user is admin to respect PII isolation
+    if (!currentUser || currentUser.email !== 'antonioestefanoprando@gmail.com') return;
 
-  // 6. Bookmarks State
+    const subCol = collection(db, 'subscribers');
+    const unsubscribe = onSnapshot(
+      subCol,
+      (snapshot) => {
+        const remoteSubs: NewsletterSubscriber[] = [];
+        snapshot.forEach((d) => remoteSubs.push(d.data() as NewsletterSubscriber));
+        if (remoteSubs.length > 0) {
+          setSubscribers(remoteSubs);
+          localStorage.setItem(SUBSCRIBERS_STORAGE_KEY, JSON.stringify(remoteSubs));
+        }
+      },
+      (error) => {
+        // Silently handle if non-admin or permission restricted
+        console.warn('Subscribers sync info:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  // 7. Bookmarks State
   const [bookmarks, setBookmarks] = useState<string[]>(() => {
     const saved = localStorage.getItem(BOOKMARKS_STORAGE_KEY);
     if (saved) {
@@ -164,7 +314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(bookmarks));
   }, [bookmarks]);
 
-  // 7. Custom Logo / Media State (Photo or Video in place of logo)
+  // 8. Custom Logo & Media State
   const [customLogoMedia, setCustomLogoMediaState] = useState<CustomLogoMedia | null>(() => {
     const saved = localStorage.getItem(CUSTOM_LOGO_STORAGE_KEY);
     if (saved) {
@@ -177,25 +327,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return null;
   });
 
-  const setCustomLogoMedia = (media: CustomLogoMedia | null) => {
-    setCustomLogoMediaState(media);
-    if (media) {
-      localStorage.setItem(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(media));
-      showNotification(media.type === 'video' ? 'Vídeo definido como logotipo!' : 'Foto definida como logotipo!');
-    } else {
-      localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
-      showNotification('Logotipo original restaurado.');
-    }
-  };
-
-  // 8. Background Animation Config (Video or 3D Canvas)
+  // 9. Background Animation Config
   const [backgroundConfig, setBackgroundConfigState] = useState<BackgroundAnimationConfig>(() => {
     const saved = localStorage.getItem(BG_CONFIG_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
       } catch {
-        // Fallback
+        // fallback
       }
     }
     return {
@@ -206,10 +345,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   });
 
-  const setBackgroundConfig = (config: BackgroundAnimationConfig) => {
+  // Sync Settings from Firestore
+  useEffect(() => {
+    const settingsDoc = doc(db, 'settings', 'branding');
+    const unsubscribe = onSnapshot(
+      settingsDoc,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.customLogoMedia !== undefined) {
+            setCustomLogoMediaState(data.customLogoMedia);
+            if (data.customLogoMedia) {
+              localStorage.setItem(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(data.customLogoMedia));
+            } else {
+              localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
+            }
+          }
+          if (data.backgroundConfig) {
+            setBackgroundConfigState(data.backgroundConfig);
+            localStorage.setItem(BG_CONFIG_STORAGE_KEY, JSON.stringify(data.backgroundConfig));
+          }
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'settings/branding');
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  const setCustomLogoMedia = async (media: CustomLogoMedia | null) => {
+    setCustomLogoMediaState(media);
+    if (media) {
+      localStorage.setItem(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(media));
+      showNotification(media.type === 'video' ? 'Vídeo definido como logotipo!' : 'Foto definida como logotipo!');
+    } else {
+      localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
+      showNotification('Logotipo original restaurado.');
+    }
+
+    try {
+      await setDoc(doc(db, 'settings', 'branding'), {
+        id: 'branding',
+        customLogoMedia: media,
+        backgroundConfig,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Could not save branding to cloud:', err);
+    }
+  };
+
+  const setBackgroundConfig = async (config: BackgroundAnimationConfig) => {
     setBackgroundConfigState(config);
     localStorage.setItem(BG_CONFIG_STORAGE_KEY, JSON.stringify(config));
     showNotification('Animação de fundo atualizada!');
+
+    try {
+      await setDoc(doc(db, 'settings', 'branding'), {
+        id: 'branding',
+        customLogoMedia,
+        backgroundConfig: config,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Could not save background settings to cloud:', err);
+    }
   };
 
   // Navigation State
@@ -221,7 +423,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
-  // Helper notification toast
   const showNotification = (msg: string) => {
     setNotification(msg);
     setTimeout(() => {
@@ -229,7 +430,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 3500);
   };
 
-  // Translation function
   const t = (key: string): string => {
     const langDict = TRANSLATIONS[language] || TRANSLATIONS['pt'];
     return langDict[key] || TRANSLATIONS['pt'][key] || key;
@@ -261,16 +461,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Open Article & record view
-  const openArticle = (id: string) => {
+  const openArticle = async (id: string) => {
     setSelectedArticleId(id);
     setCurrentView('article');
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    // Increment view count
+    // Optimistic local update
+    const target = articles.find((a) => a.id === id);
+    const newViews = (target?.views || 0) + 1;
     setArticles((prev) =>
-      prev.map((art) => (art.id === id ? { ...art, views: art.views + 1 } : art))
+      prev.map((art) => (art.id === id ? { ...art, views: newViews } : art))
     );
+
+    // Persist view increment to Firestore
+    try {
+      await setDoc(doc(db, 'articles', id), { views: newViews }, { merge: true });
+    } catch {
+      // Non-blocking for reader
+    }
   };
 
   const openCategory = (catId: string) => {
@@ -293,65 +501,109 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const toggleLikeArticle = (articleId: string) => {
+  const toggleLikeArticle = async (articleId: string) => {
+    const art = articles.find((a) => a.id === articleId);
+    if (!art) return;
+    const isLiked = art.likedByMe;
+    const newLikes = isLiked ? Math.max(0, art.likes - 1) : art.likes + 1;
+
     setArticles((prev) =>
-      prev.map((art) => {
-        if (art.id === articleId) {
-          const isLiked = art.likedByMe;
+      prev.map((a) => {
+        if (a.id === articleId) {
           return {
-            ...art,
-            likes: isLiked ? art.likes - 1 : art.likes + 1,
+            ...a,
+            likes: newLikes,
             likedByMe: !isLiked
           };
         }
-        return art;
+        return a;
       })
     );
+
+    try {
+      await setDoc(doc(db, 'articles', articleId), { likes: newLikes }, { merge: true });
+    } catch {
+      // Non-blocking
+    }
   };
 
-  const addComment = (articleId: string, content: string, authorName: string, parentId: string | null = null) => {
+  const addComment = async (
+    articleId: string,
+    content: string,
+    authorName: string,
+    parentId: string | null = null
+  ) => {
     const cleanContent = content.trim();
     if (!cleanContent) return;
+
+    const authorDisplayName = currentUser?.displayName || authorName.trim() || 'Leitor Vibe Hub';
+    const authorPhoto =
+      currentUser?.photoURL ||
+      `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(authorDisplayName)}`;
 
     const newComment: Comment = {
       id: `c-${Date.now()}`,
       articleId,
       parentId,
-      authorName: authorName.trim() || 'Leitor Anônimo',
-      authorAvatar: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(authorName || 'leitor')}`,
-      authorRole: 'reader',
+      authorName: authorDisplayName,
+      authorAvatar: authorPhoto,
+      authorRole: currentUser?.email === 'antonioestefanoprando@gmail.com' ? 'moderator' : 'reader',
       content: cleanContent,
       createdAt: new Date().toISOString(),
       likes: 1,
       likedByMe: true
     };
 
+    // Optimistic UI
     setComments((prev) => [newComment, ...prev]);
     showNotification(t('commentPosted'));
+
+    // Save to Firestore
+    try {
+      await setDoc(doc(db, 'comments', newComment.id), newComment);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `comments/${newComment.id}`);
+    }
   };
 
-  const likeComment = (commentId: string) => {
+  const likeComment = async (commentId: string) => {
+    const c = comments.find((item) => item.id === commentId);
+    if (!c) return;
+    const isLiked = c.likedByMe;
+    const newLikes = isLiked ? Math.max(0, c.likes - 1) : c.likes + 1;
+
     setComments((prev) =>
-      prev.map((c) => {
-        if (c.id === commentId) {
-          const isLiked = c.likedByMe;
+      prev.map((item) => {
+        if (item.id === commentId) {
           return {
-            ...c,
-            likes: isLiked ? c.likes - 1 : c.likes + 1,
+            ...item,
+            likes: newLikes,
             likedByMe: !isLiked
           };
         }
-        return c;
+        return item;
       })
     );
+
+    try {
+      await setDoc(doc(db, 'comments', commentId), { likes: newLikes }, { merge: true });
+    } catch {
+      // Non-blocking
+    }
   };
 
-  const deleteComment = (commentId: string) => {
+  const deleteComment = async (commentId: string) => {
     setComments((prev) => prev.filter((c) => c.id !== commentId && c.parentId !== commentId));
     showNotification('Comentário removido.');
+
+    try {
+      await deleteDoc(doc(db, 'comments', commentId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `comments/${commentId}`);
+    }
   };
 
-  const addArticle = (newArticleData: Omit<Article, 'id' | 'views' | 'likes' | 'shares'>) => {
+  const addArticle = async (newArticleData: Omit<Article, 'id' | 'views' | 'likes' | 'shares'>) => {
     const id = `vh-${Date.now().toString().slice(-4)}`;
     const newArticle: Article = {
       ...newArticleData,
@@ -364,32 +616,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setArticles((prev) => [newArticle, ...prev]);
     showNotification(t('adminArticleSaved'));
+
+    try {
+      await setDoc(doc(db, 'articles', id), newArticle);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `articles/${id}`);
+    }
   };
 
-  const updateArticle = (updatedArticle: Article) => {
+  const updateArticle = async (updatedArticle: Article) => {
     setArticles((prev) =>
       prev.map((art) => (art.id === updatedArticle.id ? updatedArticle : art))
     );
     showNotification(t('adminArticleSaved'));
+
+    try {
+      await setDoc(doc(db, 'articles', updatedArticle.id), updatedArticle);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `articles/${updatedArticle.id}`);
+    }
   };
 
-  const deleteArticle = (id: string) => {
+  const deleteArticle = async (id: string) => {
     setArticles((prev) => prev.filter((art) => art.id !== id));
     setComments((prev) => prev.filter((c) => c.articleId !== id));
     setBookmarks((prev) => prev.filter((artId) => artId !== id));
     showNotification('Artigo excluído com sucesso.');
+
+    try {
+      await deleteDoc(doc(db, 'articles', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `articles/${id}`);
+    }
   };
 
-  const subscribeNewsletter = (
+  const subscribeNewsletter = async (
     email: string,
     name?: string,
     frequency: 'daily' | 'weekly' | 'breaking' = 'weekly',
     topics: string[] = ['tech', 'planet', 'culture']
-  ): boolean => {
+  ): Promise<boolean> => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) return false;
 
-    // Check if already subscribed
     const exists = subscribers.some((sub) => sub.email.toLowerCase() === cleanEmail);
     if (exists) {
       showNotification('Este e-mail já está cadastrado na newsletter!');
@@ -399,7 +668,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newSub: NewsletterSubscriber = {
       id: `sub-${Date.now()}`,
       email: cleanEmail,
-      name: name?.trim(),
+      name: name?.trim() || '',
       frequency,
       topics,
       subscribedAt: new Date().toISOString()
@@ -407,10 +676,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSubscribers((prev) => [newSub, ...prev]);
     showNotification(t('newsletterSuccess'));
+
+    try {
+      await setDoc(doc(db, 'subscribers', newSub.id), newSub);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `subscribers/${newSub.id}`);
+    }
     return true;
   };
 
-  const resetToDefaultData = () => {
+  const resetToDefaultData = async () => {
     setArticles(INITIAL_ARTICLES);
     setComments(INITIAL_COMMENTS);
     setSubscribers(INITIAL_SUBSCRIBERS);
@@ -428,6 +703,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem(BOOKMARKS_STORAGE_KEY);
     localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
     localStorage.removeItem(BG_CONFIG_STORAGE_KEY);
+
+    // Sync reset to Firestore
+    try {
+      const batch = writeBatch(db);
+      INITIAL_ARTICLES.forEach((art) => {
+        batch.set(doc(db, 'articles', art.id), art);
+      });
+      INITIAL_COMMENTS.forEach((c) => {
+        batch.set(doc(db, 'comments', c.id), c);
+      });
+      batch.set(doc(db, 'settings', 'branding'), {
+        id: 'branding',
+        customLogoMedia: null,
+        backgroundConfig: {
+          enabled: true,
+          videoUrl: null,
+          opacity: 0.22,
+          mode: 'canvas3d'
+        },
+        updatedAt: new Date().toISOString()
+      });
+      await batch.commit();
+    } catch (err) {
+      console.warn('Reset sync warning:', err);
+    }
+
     showNotification(t('adminDataReset'));
   };
 
@@ -461,6 +762,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         notification,
         customLogoMedia,
         backgroundConfig,
+        currentUser,
+        isAuthLoading,
+        isFirebaseConnected,
+        signInWithGoogle,
+        signOutUser,
         t,
         setLanguage,
         toggleTheme,

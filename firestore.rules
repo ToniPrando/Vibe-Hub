@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Primitives & Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return (isVerified() && request.auth.token.email == 'antonioestefanoprando@gmail.com') ||
+        (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    // Validation helper for Article
+    function isValidArticle(data) {
+      return data.keys().hasAll(['id', 'title', 'content', 'categoryId', 'publishedAt', 'status']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.title is string && data.title.size() <= 300 &&
+        data.content is string && data.content.size() <= 50000 &&
+        data.categoryId is string && data.categoryId.size() <= 64 &&
+        data.publishedAt is string && data.publishedAt.size() <= 64 &&
+        (data.status == 'published' || data.status == 'draft');
+    }
+
+    // Validation helper for Comment
+    function isValidComment(data) {
+      return data.keys().hasAll(['id', 'articleId', 'authorName', 'content', 'createdAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.articleId is string && data.articleId.size() <= 128 &&
+        data.authorName is string && data.authorName.size() <= 100 &&
+        data.content is string && data.content.size() <= 5000 &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    // Validation helper for Subscriber
+    function isValidSubscriber(data) {
+      return data.keys().hasAll(['id', 'email', 'frequency', 'subscribedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.email is string && data.email.size() <= 256 &&
+        data.subscribedAt is string && data.subscribedAt.size() <= 64 &&
+        (data.frequency == 'daily' || data.frequency == 'weekly' || data.frequency == 'breaking');
+    }
+
+    // Validation helper for SiteSettings
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll(['id']) &&
+        data.id is string && data.id.size() <= 128;
+    }
+
+    // Articles Collection
+    match /articles/{articleId} {
+      allow get, list: if true;
+      allow create: if isValidId(articleId) && (isAdmin() || isValidArticle(incoming()));
+      allow update: if isValidId(articleId) && (
+        isAdmin() ||
+        (isValidArticle(incoming()) && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['views']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['likes']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['shares'])
+        ))
+      );
+      allow delete: if isValidId(articleId) && (isAdmin() || true);
+    }
+
+    // Comments Collection
+    match /comments/{commentId} {
+      allow get, list: if true;
+      allow create: if isValidId(commentId) && isValidComment(incoming());
+      allow update: if isValidId(commentId) && (
+        isAdmin() ||
+        (isValidComment(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['likes']))
+      );
+      allow delete: if isValidId(commentId);
+    }
+
+    // Subscribers Collection (PII Isolated)
+    match /subscribers/{subscriberId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(subscriberId) && isValidSubscriber(incoming());
+      allow update, delete: if isValidId(subscriberId) && isAdmin();
+    }
+
+    // Site Settings Collection
+    match /settings/{settingId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(settingId) && isValidSiteSettings(incoming());
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+  }
+}

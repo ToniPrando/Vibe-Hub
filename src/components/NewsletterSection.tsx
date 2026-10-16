@@ -10,11 +10,11 @@ export const NewsletterSection: React.FC = () => {
   const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'breaking'>('weekly');
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
 
-    const ok = subscribeNewsletter(email, name, frequency);
+    const ok = await subscribeNewsletter(email, name, frequency);
     if (ok) {
       setIsSuccess(true);
       setEmail('');

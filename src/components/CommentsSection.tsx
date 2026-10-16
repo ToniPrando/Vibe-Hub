@@ -8,7 +8,7 @@ interface CommentsSectionProps {
 }
 
 export const CommentsSection: React.FC<CommentsSectionProps> = ({ articleId }) => {
-  const { comments, addComment, likeComment, deleteComment, t } = useApp();
+  const { comments, addComment, likeComment, deleteComment, t, currentUser, signInWithGoogle } = useApp();
 
   const [authorName, setAuthorName] = useState('');
   const [commentText, setCommentText] = useState('');
@@ -33,14 +33,16 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({ articleId }) =
   const handleSubmitRoot = (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
-    addComment(articleId, commentText, authorName);
+    const resolvedName = currentUser?.displayName || authorName.trim() || 'Leitor Vibe Hub';
+    addComment(articleId, commentText, resolvedName);
     setCommentText('');
   };
 
   const handleSubmitReply = (parentId: string, e: React.FormEvent) => {
     e.preventDefault();
     if (!replyText.trim()) return;
-    addComment(articleId, replyText, replyAuthorName, parentId);
+    const resolvedName = currentUser?.displayName || replyAuthorName.trim() || 'Leitor Vibe Hub';
+    addComment(articleId, replyText, resolvedName, parentId);
     setReplyText('');
     setReplyingToId(null);
   };
@@ -111,23 +113,46 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({ articleId }) =
 
       {/* Main Comment Input Box */}
       <form onSubmit={handleSubmitRoot} className="mb-10 p-5 rounded-2xl bg-white dark:bg-[#0c1425] border border-slate-200/80 dark:border-slate-800 shadow-sm">
-        <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">
-          {t('leaveComment')}
-        </h3>
-
-        <div className="mb-3">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700/60 text-xs">
-            <User className="w-3.5 h-3.5 text-slate-400" />
-            <input
-              type="text"
-              value={authorName}
-              onChange={(e) => setAuthorName(e.target.value)}
-              placeholder={t('yourName')}
-              maxLength={40}
-              className="w-full bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 placeholder:text-slate-400"
-            />
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+            {t('leaveComment')}
+          </h3>
+          {currentUser ? (
+            <div className="flex items-center gap-2 text-xs text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/40 px-2.5 py-1 rounded-full border border-sky-200 dark:border-sky-800/50">
+              <img
+                src={currentUser.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(currentUser.displayName || 'user')}`}
+                alt=""
+                className="w-4 h-4 rounded-full"
+              />
+              <span className="font-medium truncate max-w-[150px]">{currentUser.displayName || currentUser.email}</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className="text-xs text-slate-600 dark:text-slate-300 hover:text-sky-600 dark:hover:text-sky-400 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <span>Entrar com</span>
+              <span className="font-semibold text-sky-500">Google</span>
+            </button>
+          )}
         </div>
+
+        {!currentUser && (
+          <div className="mb-3">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700/60 text-xs">
+              <User className="w-3.5 h-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={authorName}
+                onChange={(e) => setAuthorName(e.target.value)}
+                placeholder={t('yourName')}
+                maxLength={40}
+                className="w-full bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 placeholder:text-slate-400"
+              />
+            </div>
+          </div>
+        )}
 
         <div className="mb-3">
           <textarea

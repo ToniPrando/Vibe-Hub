@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "Article": {
+      "title": "Article",
+      "description": "Represents a published or draft blog article on Vibe Hub",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "slug": { "type": "string", "maxLength": 256 },
+        "title": { "type": "string", "maxLength": 300 },
+        "subtitle": { "type": "string", "maxLength": 500 },
+        "excerpt": { "type": "string", "maxLength": 1000 },
+        "content": { "type": "string", "maxLength": 50000 },
+        "categoryId": { "type": "string", "maxLength": 64 },
+        "tags": { "type": "array" },
+        "coverImage": { "type": "string", "maxLength": 2048 },
+        "coverImageCaption": { "type": "string", "maxLength": 500 },
+        "author": { "type": "object" },
+        "publishedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "readTime": { "type": "number" },
+        "views": { "type": "number" },
+        "likes": { "type": "number" },
+        "shares": { "type": "number" },
+        "isFeatured": { "type": "boolean" },
+        "isTrending": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["published", "draft"] }
+      },
+      "required": ["id", "title", "content", "categoryId", "publishedAt", "status"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Interactive reader comment or threaded reply on an article",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "articleId": { "type": "string", "maxLength": 128 },
+        "parentId": { "type": "string", "maxLength": 128 },
+        "authorName": { "type": "string", "maxLength": 100 },
+        "authorAvatar": { "type": "string", "maxLength": 2048 },
+        "authorRole": { "type": "string", "enum": ["reader", "author", "vip", "moderator"] },
+        "content": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "likes": { "type": "number" }
+      },
+      "required": ["id", "articleId", "authorName", "content", "createdAt"]
+    },
+    "Subscriber": {
+      "title": "Subscriber",
+      "description": "Newsletter subscriber email and preferences",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 256 },
+        "name": { "type": "string", "maxLength": 100 },
+        "frequency": { "type": "string", "enum": ["daily", "weekly", "breaking"] },
+        "topics": { "type": "array" },
+        "subscribedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "email", "frequency", "subscribedAt"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Global custom logo and background animation settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "customLogo": { "type": "object" },
+        "backgroundConfig": { "type": "object" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id"]
+    }
+  },
+  "firestore": {
+    "/articles/{articleId}": {
+      "schema": "Article",
+      "description": "Collection of blog articles and news stories"
+    },
+    "/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Reader comments and replies for articles"
+    },
+    "/subscribers/{subscriberId}": {
+      "schema": "Subscriber",
+      "description": "Registered newsletter subscriber emails"
+    },
+    "/settings/{settingId}": {
+      "schema": "SiteSettings",
+      "description": "Site-wide configuration and branding overrides"
+    }
+  }
+}
