@@ -1,0 +1,6 @@
+{
+  "name": "Vibe Hub",
+  "description": "Seu portal de notícias, novidades e assuntos do momento com comentários interativos, busca avançada e comunidade global.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
