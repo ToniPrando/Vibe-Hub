@@ -113,13 +113,18 @@ export const AdminPanel: React.FC = () => {
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        setCustomLogoMedia({
-          type: 'image',
-          url: reader.result,
-          name: file.name
-        });
+        try {
+          await setCustomLogoMedia({
+            type: 'image',
+            url: reader.result,
+            name: file.name
+          });
+        } catch (err) {
+          console.error('Error setting custom logo photo:', err);
+          showNotification('Erro ao processar imagem para logotipo.');
+        }
       }
     };
     reader.readAsDataURL(file);
@@ -135,19 +140,24 @@ export const AdminPanel: React.FC = () => {
       return;
     }
 
-    if (file.size > 15 * 1024 * 1024) {
-      showNotification('O vídeo local deve ter menos de 15MB para desempenho ideal no navegador.');
+    if (file.size > 20 * 1024 * 1024) {
+      showNotification('O vídeo local deve ter menos de 20MB para desempenho ideal no navegador.');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        setCustomLogoMedia({
-          type: 'video',
-          url: reader.result,
-          name: file.name
-        });
+        try {
+          await setCustomLogoMedia({
+            type: 'video',
+            url: reader.result,
+            name: file.name
+          });
+        } catch (err) {
+          console.error('Error setting custom logo video:', err);
+          showNotification('Erro ao processar vídeo para logotipo.');
+        }
       }
     };
     reader.readAsDataURL(file);
@@ -163,21 +173,26 @@ export const AdminPanel: React.FC = () => {
       return;
     }
 
-    if (file.size > 20 * 1024 * 1024) {
-      showNotification('Para vídeos de fundo, o tamanho limite recomendado é de 20MB.');
+    if (file.size > 30 * 1024 * 1024) {
+      showNotification('Para vídeos de fundo, o tamanho limite recomendado é de 30MB.');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        setBackgroundConfig({
-          ...backgroundConfig,
-          videoUrl: reader.result,
-          mode: 'video',
-          enabled: true
-        });
-        showNotification('Vídeo aplicado com sucesso à animação de fundo!');
+        try {
+          await setBackgroundConfig({
+            ...backgroundConfig,
+            videoUrl: reader.result,
+            mode: 'video',
+            enabled: true
+          });
+          showNotification('Vídeo aplicado com sucesso à animação de fundo!');
+        } catch (err) {
+          console.error('Error setting background video:', err);
+          showNotification('Erro ao processar vídeo de fundo.');
+        }
       }
     };
     reader.readAsDataURL(file);

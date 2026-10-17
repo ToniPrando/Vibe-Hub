@@ -32,6 +32,16 @@ import {
 } from '../types';
 import { INITIAL_ARTICLES, INITIAL_COMMENTS, INITIAL_SUBSCRIBERS } from '../data/initialArticles';
 import { TRANSLATIONS } from '../data/translations';
+import {
+  safeLocalStorageGet,
+  safeLocalStorageSet,
+  safeLocalStorageRemove
+} from '../utils/storage';
+import {
+  saveMediaItem,
+  getMediaItem,
+  removeMediaItem
+} from '../utils/mediaStorage';
 
 interface AppContextType {
   // State
@@ -97,13 +107,13 @@ const BG_CONFIG_STORAGE_KEY = 'vibehub_bg_config_v1';
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // 1. Language State
   const [language, setLanguageState] = useState<Language>(() => {
-    const saved = localStorage.getItem(LANG_STORAGE_KEY) as Language;
+    const saved = safeLocalStorageGet(LANG_STORAGE_KEY) as Language;
     return saved && ['pt', 'en', 'es'].includes(saved) ? saved : 'pt';
   });
 
   // 2. Theme State (Dark by default)
   const [theme, setThemeState] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode;
+    const saved = safeLocalStorageGet(THEME_STORAGE_KEY) as ThemeMode;
     if (saved === 'light' || saved === 'dark') return saved;
     return 'dark';
   });
@@ -122,7 +132,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       root.setAttribute('data-theme', 'light');
       root.style.colorScheme = 'light';
     }
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
+    safeLocalStorageSet(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
   // 3. Firebase Auth State
@@ -159,7 +169,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 4. Articles State (Local fallback + Cloud Firestore)
   const [articles, setArticles] = useState<Article[]>(() => {
-    const saved = localStorage.getItem(ARTICLES_STORAGE_KEY);
+    const saved = safeLocalStorageGet(ARTICLES_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -200,7 +210,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // Sort by published date descending
           remoteArticles.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
           setArticles(remoteArticles);
-          localStorage.setItem(ARTICLES_STORAGE_KEY, JSON.stringify(remoteArticles));
+          safeLocalStorageSet(ARTICLES_STORAGE_KEY, JSON.stringify(remoteArticles));
         }
       },
       (error) => {
@@ -213,7 +223,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 5. Comments State
   const [comments, setComments] = useState<Comment[]>(() => {
-    const saved = localStorage.getItem(COMMENTS_STORAGE_KEY);
+    const saved = safeLocalStorageGet(COMMENTS_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -249,7 +259,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
           remoteComments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
           setComments(remoteComments);
-          localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(remoteComments));
+          safeLocalStorageSet(COMMENTS_STORAGE_KEY, JSON.stringify(remoteComments));
         }
       },
       (error) => {
@@ -262,7 +272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 6. Subscribers State
   const [subscribers, setSubscribers] = useState<NewsletterSubscriber[]>(() => {
-    const saved = localStorage.getItem(SUBSCRIBERS_STORAGE_KEY);
+    const saved = safeLocalStorageGet(SUBSCRIBERS_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -285,7 +295,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snapshot.forEach((d) => remoteSubs.push(d.data() as NewsletterSubscriber));
         if (remoteSubs.length > 0) {
           setSubscribers(remoteSubs);
-          localStorage.setItem(SUBSCRIBERS_STORAGE_KEY, JSON.stringify(remoteSubs));
+          safeLocalStorageSet(SUBSCRIBERS_STORAGE_KEY, JSON.stringify(remoteSubs));
         }
       },
       (error) => {
@@ -299,7 +309,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 7. Bookmarks State
   const [bookmarks, setBookmarks] = useState<string[]>(() => {
-    const saved = localStorage.getItem(BOOKMARKS_STORAGE_KEY);
+    const saved = safeLocalStorageGet(BOOKMARKS_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -311,12 +321,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   useEffect(() => {
-    localStorage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(bookmarks));
+    safeLocalStorageSet(BOOKMARKS_STORAGE_KEY, JSON.stringify(bookmarks));
   }, [bookmarks]);
 
   // 8. Custom Logo & Media State
   const [customLogoMedia, setCustomLogoMediaState] = useState<CustomLogoMedia | null>(() => {
-    const saved = localStorage.getItem(CUSTOM_LOGO_STORAGE_KEY);
+    const saved = safeLocalStorageGet(CUSTOM_LOGO_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -329,7 +339,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 9. Background Animation Config
   const [backgroundConfig, setBackgroundConfigState] = useState<BackgroundAnimationConfig>(() => {
-    const saved = localStorage.getItem(BG_CONFIG_STORAGE_KEY);
+    const saved = safeLocalStorageGet(BG_CONFIG_STORAGE_KEY);
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -345,6 +355,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   });
 
+  // Restore persistent large media from IndexedDB on startup
+  useEffect(() => {
+    getMediaItem('vibehub_bg_video').then((videoData) => {
+      if (videoData) {
+        setBackgroundConfigState((prev) => {
+          if (!prev.videoUrl || prev.videoUrl === 'indexeddb:vibehub_bg_video') {
+            return {
+              ...prev,
+              videoUrl: videoData,
+              mode: 'video'
+            };
+          }
+          return prev;
+        });
+      }
+    });
+
+    getMediaItem('vibehub_custom_logo').then((logoData) => {
+      if (logoData) {
+        setCustomLogoMediaState((prev) => {
+          if (prev && (!prev.url || prev.url === 'indexeddb:vibehub_custom_logo')) {
+            return {
+              ...prev,
+              url: logoData
+            };
+          }
+          return prev;
+        });
+      }
+    });
+  }, []);
+
   // Sync Settings from Firestore
   useEffect(() => {
     const settingsDoc = doc(db, 'settings', 'branding');
@@ -354,16 +396,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (docSnap.exists()) {
           const data = docSnap.data();
           if (data.customLogoMedia !== undefined) {
-            setCustomLogoMediaState(data.customLogoMedia);
-            if (data.customLogoMedia) {
-              localStorage.setItem(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(data.customLogoMedia));
+            const logo = data.customLogoMedia as CustomLogoMedia | null;
+            if (logo && logo.url === 'indexeddb:vibehub_custom_logo') {
+              getMediaItem('vibehub_custom_logo').then((localLogo) => {
+                if (localLogo) {
+                  setCustomLogoMediaState({ ...logo, url: localLogo });
+                }
+              });
             } else {
-              localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
+              setCustomLogoMediaState(logo);
+            }
+            if (logo) {
+              safeLocalStorageSet(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(logo));
+            } else {
+              safeLocalStorageRemove(CUSTOM_LOGO_STORAGE_KEY);
             }
           }
           if (data.backgroundConfig) {
-            setBackgroundConfigState(data.backgroundConfig);
-            localStorage.setItem(BG_CONFIG_STORAGE_KEY, JSON.stringify(data.backgroundConfig));
+            const bg = data.backgroundConfig as BackgroundAnimationConfig;
+            if (bg.videoUrl === 'indexeddb:vibehub_bg_video') {
+              getMediaItem('vibehub_bg_video').then((localVideo) => {
+                if (localVideo) {
+                  setBackgroundConfigState({ ...bg, videoUrl: localVideo });
+                }
+              });
+            } else {
+              setBackgroundConfigState(bg);
+            }
+            safeLocalStorageSet(BG_CONFIG_STORAGE_KEY, JSON.stringify(bg));
           }
         }
       },
@@ -376,37 +436,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const setCustomLogoMedia = async (media: CustomLogoMedia | null) => {
+    // 1. Immediately update local state
     setCustomLogoMediaState(media);
-    if (media) {
-      localStorage.setItem(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(media));
-      showNotification(media.type === 'video' ? 'Vídeo definido como logotipo!' : 'Foto definida como logotipo!');
-    } else {
-      localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
-      showNotification('Logotipo original restaurado.');
-    }
 
-    try {
-      await setDoc(doc(db, 'settings', 'branding'), {
-        id: 'branding',
-        customLogoMedia: media,
-        backgroundConfig,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-    } catch (err) {
-      console.warn('Could not save branding to cloud:', err);
+    if (media) {
+      let sanitizedMedia = { ...media };
+      // If large data URL, save to IndexedDB and keep lightweight pointer in localStorage
+      if (media.url && media.url.startsWith('data:') && media.url.length > 50000) {
+        await saveMediaItem('vibehub_custom_logo', media.url);
+        sanitizedMedia = { ...media, url: 'indexeddb:vibehub_custom_logo' };
+      }
+      safeLocalStorageSet(CUSTOM_LOGO_STORAGE_KEY, JSON.stringify(sanitizedMedia));
+      showNotification(media.type === 'video' ? 'Vídeo definido como logotipo!' : 'Foto definida como logotipo!');
+
+      try {
+        await setDoc(doc(db, 'settings', 'branding'), {
+          id: 'branding',
+          customLogoMedia: sanitizedMedia,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (err) {
+        console.warn('Could not save branding to cloud:', err);
+      }
+    } else {
+      await removeMediaItem('vibehub_custom_logo');
+      safeLocalStorageRemove(CUSTOM_LOGO_STORAGE_KEY);
+      showNotification('Logotipo original restaurado.');
+
+      try {
+        await setDoc(doc(db, 'settings', 'branding'), {
+          id: 'branding',
+          customLogoMedia: null,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (err) {
+        console.warn('Could not reset branding in cloud:', err);
+      }
     }
   };
 
   const setBackgroundConfig = async (config: BackgroundAnimationConfig) => {
+    // 1. Immediately update React state for instant responsiveness and playback
     setBackgroundConfigState(config);
-    localStorage.setItem(BG_CONFIG_STORAGE_KEY, JSON.stringify(config));
+
+    // 2. Prepare lightweight sanitized copy for localStorage and Firestore
+    let sanitizedConfig: BackgroundAnimationConfig = { ...config };
+
+    if (config.videoUrl && config.videoUrl.startsWith('data:') && config.videoUrl.length > 50000) {
+      // Store large media in IndexedDB (avoiding localStorage 5MB quota)
+      await saveMediaItem('vibehub_bg_video', config.videoUrl);
+      sanitizedConfig = {
+        ...config,
+        videoUrl: 'indexeddb:vibehub_bg_video'
+      };
+    } else if (!config.videoUrl) {
+      await removeMediaItem('vibehub_bg_video');
+    }
+
+    // 3. Save lightweight payload safely
+    safeLocalStorageSet(BG_CONFIG_STORAGE_KEY, JSON.stringify(sanitizedConfig));
+
     showNotification('Animação de fundo atualizada!');
 
+    // 4. Save to Firestore
     try {
       await setDoc(doc(db, 'settings', 'branding'), {
         id: 'branding',
-        customLogoMedia,
-        backgroundConfig: config,
+        backgroundConfig: sanitizedConfig,
         updatedAt: new Date().toISOString()
       }, { merge: true });
     } catch (err) {
@@ -437,7 +533,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem(LANG_STORAGE_KEY, lang);
+    safeLocalStorageSet(LANG_STORAGE_KEY, lang);
   };
 
   const toggleTheme = () => {
@@ -455,7 +551,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         root.setAttribute('data-theme', 'light');
         root.style.colorScheme = 'light';
       }
-      localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+      safeLocalStorageSet(THEME_STORAGE_KEY, nextTheme);
       showNotification(nextTheme === 'dark' ? 'Modo Escuro ativado 🌙' : 'Modo Claro ativado ☀️');
       return nextTheme;
     });
@@ -697,12 +793,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       opacity: 0.22,
       mode: 'canvas3d'
     });
-    localStorage.removeItem(ARTICLES_STORAGE_KEY);
-    localStorage.removeItem(COMMENTS_STORAGE_KEY);
-    localStorage.removeItem(SUBSCRIBERS_STORAGE_KEY);
-    localStorage.removeItem(BOOKMARKS_STORAGE_KEY);
-    localStorage.removeItem(CUSTOM_LOGO_STORAGE_KEY);
-    localStorage.removeItem(BG_CONFIG_STORAGE_KEY);
+    await removeMediaItem('vibehub_bg_video');
+    await removeMediaItem('vibehub_custom_logo');
+    safeLocalStorageRemove(ARTICLES_STORAGE_KEY);
+    safeLocalStorageRemove(COMMENTS_STORAGE_KEY);
+    safeLocalStorageRemove(SUBSCRIBERS_STORAGE_KEY);
+    safeLocalStorageRemove(BOOKMARKS_STORAGE_KEY);
+    safeLocalStorageRemove(CUSTOM_LOGO_STORAGE_KEY);
+    safeLocalStorageRemove(BG_CONFIG_STORAGE_KEY);
 
     // Sync reset to Firestore
     try {
